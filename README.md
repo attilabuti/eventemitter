@@ -1,5 +1,11 @@
 # Event Emitter
 
+[![build status](https://img.shields.io/github/workflow/status/attilabuti/eventemitter/CI/main?style=flat-square)](https://github.com/attilabuti/eventemitter/actions)
+[![codecov](https://img.shields.io/codecov/c/github/attilabuti/eventemitter?style=flat-square)](https://codecov.io/gh/attilabuti/eventemitter)
+[![Go Report Card](https://goreportcard.com/badge/github.com/attilabuti/eventemitter?style=flat-square)](https://goreportcard.com/report/github.com/attilabuti/eventemitter)
+[![Go Reference](https://pkg.go.dev/badge/github.com/attilabuti/eventemitter.svg)](https://pkg.go.dev/github.com/attilabuti/eventemitter)
+[![license](https://img.shields.io/github/license/attilabuti/eventemitter?style=flat-square)](https://raw.githubusercontent.com/attilabuti/eventemitter/main/LICENSE)
+
 Simple Event Emitter for Go Programming Language 1.18+.
 
 ## Installation
