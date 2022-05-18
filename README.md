@@ -31,16 +31,19 @@ func main() {
     // Creating an instance.
     emitter := eventemitter.New()
 
-    // Register an event listener.
-    emitter.AddListener("test_event", func(name string) {
+    // Event handler.
+    event := func(name string) {
         fmt.Printf("Hello, %s!", name)
-    })
+    }
+
+    // Register an event listener.
+    emitter.AddListener("test_event", event)
 
     // Emit event sync.
     emitter.EmitSync("test_event", "World")
 
     // Remove event listener.
-    emitter.RemoveListener("test_event")
+    emitter.RemoveListener("test_event", event)
 }
 ```
 

@@ -1,4 +1,4 @@
-module github.com/attilabuti/eventemitter
+module github.com/attilabuti/eventemitter/v2
 
 go 1.18
 
