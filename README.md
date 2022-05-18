@@ -11,7 +11,7 @@ Simple Event Emitter for Go Programming Language 1.18+.
 ## Installation
 
 ```bash
-$ go get github.com/attilabuti/eventemitter@latest
+$ go get github.com/attilabuti/eventemitter/v2@latest
 ```
 
 ## Usage
