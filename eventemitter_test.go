@@ -1,6 +1,7 @@
 package eventemitter
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 
@@ -29,29 +30,36 @@ func TestAddListenerOn(t *testing.T) {
 		assert.True(t, ok)
 	}
 
-	// Register an event.
-	err = emitter.AddListener("add_listener", func() {})
-	if assert.NoError(t, err) {
-		_, ok := emitter.listeners.Load("add_listener")
-		assert.True(t, ok)
-	}
-
-	// Register same event twice.
 	event := func() {}
-	emitter.On("same_event", event)
-	err = emitter.On("same_event", event)
-	if assert.Error(t, err) {
-		assert.Equal(t, ErrEventExists, err)
-
-		_, ok := emitter.listeners.Load("same_event")
+	err = emitter.AddListener("other_event", event)
+	if assert.NoError(t, err) {
+		_, ok := emitter.listeners.Load("other_event")
 		assert.True(t, ok)
 	}
 
-	// Empty event name.
-	err = emitter.AddListener("", func() {})
-	if assert.Error(t, err) {
-		assert.Equal(t, ErrEmptyName, err)
+	err = emitter.On("other_event", func() bool {
+		return true
+	})
+	if assert.NoError(t, err) {
+		_, ok := emitter.listeners.Load("event")
+		assert.True(t, ok)
 	}
+
+	err = emitter.On("other_event", &event)
+	if assert.NoError(t, err) {
+		listeners, ok := emitter.listeners.Load("other_event")
+		assert.Equal(t, 3, len(listeners.([]any)))
+		assert.True(t, ok)
+	}
+
+	// Register same event multiple times.
+	for i := 0; i < 10; i++ {
+		err = emitter.AddListener("same_event", event)
+		assert.NoError(t, err)
+	}
+	listeners, ok := emitter.listeners.Load("same_event")
+	assert.Equal(t, 10, len(listeners.([]any)))
+	assert.True(t, ok)
 
 	// Empty event name.
 	err = emitter.On("", func() {})
@@ -65,8 +73,14 @@ func TestAddListenerOn(t *testing.T) {
 		assert.Equal(t, ErrNotAFunction, err)
 	}
 
-	// Register an event without handler.
+	// Not a function.
 	err = emitter.On("nil", "not a function")
+	if assert.Error(t, err) {
+		assert.Equal(t, ErrNotAFunction, err)
+	}
+
+	newEvent := "not a function"
+	err = emitter.AddListener("nil", &newEvent)
 	if assert.Error(t, err) {
 		assert.Equal(t, ErrNotAFunction, err)
 	}
@@ -75,73 +89,69 @@ func TestAddListenerOn(t *testing.T) {
 func TestRemoveListenerOff(t *testing.T) {
 	emitter := New()
 
-	event_1 := func() {}
+	event := func() {}
 	event_2 := func() {}
-	event_3 := func() {}
-	event_3_1 := func() {}
 
 	// Register events.
-	emitter.On("event_first", event_1)
-	emitter.AddListener("event_second", event_2)
-	emitter.On("event_third", event_3)
-	emitter.On("event_third", event_3_1)
+	emitter.AddListener("event_first", event)
+	emitter.AddListener("event_second", event)
+	emitter.AddListener("event_third", event)
+	emitter.AddListener("event_third", &event_2)
 
 	// Remove an event.
-	err := emitter.Off("event_first", event_1)
+	ok, err := emitter.Off("event_first", event)
 	if assert.NoError(t, err) {
+		assert.True(t, ok)
+
 		_, ok := emitter.listeners.Load("event_first")
 		assert.False(t, ok)
 	}
 
-	// Event does not exist.
-	err = emitter.RemoveListener("event_third", func() {})
-	if assert.Error(t, err) {
-		assert.Equal(t, ErrEventNotExists, err)
-	}
-
-	// Remove an event.
-	listeners, ok := emitter.listeners.Load("event_third")
-	assert.True(t, ok)
-	assert.Equal(t, 2, len(listeners.([]any)))
-
-	err = emitter.Off("event_third", event_3)
+	ok, err = emitter.RemoveListener("event_third", event)
 	if assert.NoError(t, err) {
 		listeners, ok := emitter.listeners.Load("event_third")
 		assert.True(t, ok)
 		assert.Equal(t, 1, len(listeners.([]any)))
-
-		err = emitter.Off("event_third", event_3)
-		if assert.Error(t, err) {
-			assert.Equal(t, ErrEventNotExists, err)
-		}
 	}
 
-	err = emitter.RemoveListener("event_third", event_3_1)
+	_, err = emitter.Off("event_third", &event_2)
 	if assert.NoError(t, err) {
 		_, ok := emitter.listeners.Load("event_third")
 		assert.False(t, ok)
+	}
 
-		err = emitter.Off("event_third", event_3_1)
-		if assert.Error(t, err) {
-			assert.Equal(t, ErrEventNotExists, err)
-		}
+	// Event listener does not exist.
+	emitter.AddListener("event_missing_listener", event)
+	ok, err = emitter.RemoveListener("event_missing_listener", func() {})
+	if assert.NoError(t, err) {
+		assert.False(t, ok)
 	}
 
 	// Event does not exist.
-	err = emitter.RemoveListener("event_fourth", func() {})
+	ok, err = emitter.RemoveListener("event_fourth", func() {})
 	if assert.Error(t, err) {
+		assert.False(t, ok)
 		assert.Equal(t, ErrEventNotExists, err)
 	}
 
 	// Empty event name.
-	err = emitter.Off("", func() {})
+	ok, err = emitter.Off("", func() {})
 	if assert.Error(t, err) {
+		assert.False(t, ok)
 		assert.Equal(t, ErrEmptyName, err)
 	}
 
-	// Remove an event without handler.
-	err = emitter.RemoveListener("event_second", "not a function")
+	// Not a function.
+	ok, err = emitter.RemoveListener("event_second", "not a function")
 	if assert.Error(t, err) {
+		assert.False(t, ok)
+		assert.Equal(t, ErrNotAFunction, err)
+	}
+
+	eventNotAFn := "not a function"
+	ok, err = emitter.Off("event_second", &eventNotAFn)
+	if assert.Error(t, err) {
+		assert.False(t, ok)
 		assert.Equal(t, ErrNotAFunction, err)
 	}
 }
@@ -150,66 +160,43 @@ func TestRemoveAllListenersClear(t *testing.T) {
 	emitter := New()
 
 	// Register events.
-	emitter.On("event_first", func() {})
-	emitter.AddListener("event_second", func() {})
-	emitter.On("event_third", func() {})
+	event := func() {}
+	events := []string{"event_1", "event_2", "event_3"}
+	for _, eventName := range events {
+		emitter.On(eventName, func() {})
+		emitter.On(eventName, &event)
+	}
 
 	// Remove multiple events.
-	emitter.RemoveAllListeners("event_first", "event_third")
-	_, ok := emitter.listeners.Load("event_first")
-	assert.False(t, ok)
-	_, ok = emitter.listeners.Load("event_second")
+	emitter.RemoveAllListeners("event_1", "event_2")
+	for _, eventName := range []string{"event_1", "event_2"} {
+		_, ok := emitter.listeners.Load(eventName)
+		assert.False(t, ok)
+	}
+
+	listeners, ok := emitter.listeners.Load("event_3")
 	assert.True(t, ok)
-	_, ok = emitter.listeners.Load("event_third")
-	assert.False(t, ok)
+	assert.Equal(t, 2, len(listeners.([]any)))
 
 	// Register events.
-	emitter.On("test_1", func() {})
-	emitter.AddListener("test_2", func() {})
-	emitter.On("test_3", func() {})
-
-	// Remove events.
-	emitter.Clear("test_1", "test_2")
-	_, ok = emitter.listeners.Load("test_1")
-	assert.False(t, ok)
-	_, ok = emitter.listeners.Load("test_2")
-	assert.False(t, ok)
-	_, ok = emitter.listeners.Load("test_3")
-	assert.True(t, ok)
-	_, ok = emitter.listeners.Load("event_second")
-	assert.True(t, ok)
-
-	// Remove all events.
-	emitter.RemoveAllListeners()
-	_, ok = emitter.listeners.Load("event_second")
-	assert.False(t, ok)
-	_, ok = emitter.listeners.Load("test_3")
-	assert.False(t, ok)
-
-	// Register events.
-	emitter.On("test_clear_1", func() {})
-	emitter.AddListener("test_clear_2", func() {})
-	emitter.On("test_clear_3", func() {})
-	_, ok = emitter.listeners.Load("test_clear_1")
-	assert.True(t, ok)
-	_, ok = emitter.listeners.Load("test_clear_2")
-	assert.True(t, ok)
-	_, ok = emitter.listeners.Load("test_clear_3")
-	assert.True(t, ok)
+	newEvent := func() {}
+	events = []string{"test_1", "test_2", "test_3"}
+	for _, eventName := range events {
+		emitter.On(eventName, func() {})
+		emitter.On(eventName, &newEvent)
+	}
 
 	// Remove all events.
 	emitter.Clear()
-	_, ok = emitter.listeners.Load("test_clear_1")
-	assert.False(t, ok)
-	_, ok = emitter.listeners.Load("test_clear_2")
-	assert.False(t, ok)
-	_, ok = emitter.listeners.Load("test_clear_3")
-	assert.False(t, ok)
+	for _, eventName := range events {
+		_, ok := emitter.listeners.Load(eventName)
+		assert.False(t, ok)
+	}
 }
 
 func TestEmit(t *testing.T) {
 	var wg sync.WaitGroup
-	wg.Add(7)
+	wg.Add(11)
 
 	emitter := New()
 
@@ -220,61 +207,68 @@ func TestEmit(t *testing.T) {
 	assert.NoError(t, emitter.Emit("empty"))
 
 	// Emitting an event with arguments.
-	emitter.On("arguments", func(a, b int) {
+	eventArgs := func(a, b int) {
 		defer wg.Done()
 
 		assert.Equal(t, 1, a)
 		assert.Equal(t, 2, b)
-	})
+	}
+	emitter.On("arguments", eventArgs)
+	emitter.On("arguments", &eventArgs)
 	assert.NoError(t, emitter.Emit("arguments", 1, 2))
 
 	// Emitting an event with multiple arguments.
-	emitter.On("multiple", func(i int, s []string, b bool) {
+	eventMultipleArgs := func(i int, s []string, b bool) {
 		defer wg.Done()
 
 		assert.Equal(t, 42, i)
 		assert.Equal(t, []string{"t", "e", "s", "t"}, s)
 		assert.Equal(t, true, b)
-	})
+	}
+	emitter.On("multiple", eventMultipleArgs)
+	emitter.On("multiple", &eventMultipleArgs)
 	assert.NoError(t, emitter.Emit("multiple", 42, []string{"t", "e", "s", "t"}, true))
 
 	// Emitting an event with multiple arguments.
-	emitter.On("variadic_any", func(args ...any) {
+	eventVariadic := func(args ...any) {
 		defer wg.Done()
 
 		assert.Equal(t, 42, args[0])
 		assert.Equal(t, []string{"t", "e", "s", "t"}, args[1])
 		assert.Equal(t, true, args[2])
-	})
+	}
+	emitter.On("variadic_any", eventVariadic)
+	emitter.On("variadic_any", &eventVariadic)
 	assert.NoError(t, emitter.Emit("variadic_any", 42, []string{"t", "e", "s", "t"}, true))
 
 	// Emitting an event with multiple arguments.
-	emitter.On("variadic_string", func(s ...string) {
+	eventVariadicMultiple := func(a int, b bool, c ...string) {
 		defer wg.Done()
 
-		assert.Equal(t, "t", s[0])
-		assert.Equal(t, "e", s[1])
-		assert.Equal(t, "s", s[2])
-		assert.Equal(t, "t", s[3])
-	})
-	assert.NoError(t, emitter.Emit("variadic_string", "t", "e", "s", "t"))
+		assert.Equal(t, 10, a)
+		assert.Equal(t, true, b)
+		assert.Equal(t, []string{"t", "e", "s", "t"}, c)
+	}
+	emitter.On("variadic", eventVariadicMultiple)
+	emitter.On("variadic", &eventVariadicMultiple)
+	assert.NoError(t, emitter.Emit("variadic", 10, true, "t", "e", "s", "t"))
 
 	// Emit event with multiple listeners.
-	event_1 := func(a, b int) {
+	event_1 := func(a int, b string) {
 		defer wg.Done()
 
 		assert.Equal(t, 1, a)
-		assert.Equal(t, 2, b)
+		assert.Equal(t, "test", b)
 	}
-	event_2 := func(c, d int) {
+	event_2 := func(a int, b string) {
 		defer wg.Done()
 
-		assert.Equal(t, 1, c)
-		assert.Equal(t, 2, d)
+		assert.Equal(t, 1, a)
+		assert.Equal(t, "test", b)
 	}
-	emitter.On("multiple_listeners", event_1)
-	emitter.On("multiple_listeners", event_2)
-	emitter.Emit("multiple_listeners", 1, 2)
+	emitter.On("different_listeners", event_1)
+	emitter.On("different_listeners", &event_2)
+	emitter.Emit("different_listeners", 1, "test")
 
 	// Emit without event name.
 	err := emitter.Emit("")
@@ -283,7 +277,7 @@ func TestEmit(t *testing.T) {
 	}
 
 	// Emitting an event that doesn't exist.
-	err = emitter.Emit("event")
+	err = emitter.Emit("event_not_exists")
 	if assert.Error(t, err) {
 		assert.Equal(t, ErrEventNotExists, err)
 	}
@@ -299,69 +293,36 @@ func TestEmitSync(t *testing.T) {
 	assert.NoError(t, emitter.EmitSync("empty"))
 
 	// Emitting an event with arguments.
-	emitter.On("arguments", func(a, b int) {
+	eventArgs := func(a, b int) {
 		assert.Equal(t, 1, a)
 		assert.Equal(t, 2, b)
-	})
+	}
+	emitter.On("arguments", eventArgs)
+	emitter.On("arguments", &eventArgs)
 	assert.NoError(t, emitter.EmitSync("arguments", 1, 2))
 
 	// Emitting an event with multiple arguments.
-	emitter.On("multiple", func(i int, s []string, b bool) {
-		assert.Equal(t, 42, i)
-		assert.Equal(t, []string{"t", "e", "s", "t"}, s)
+	eventVariadicMultiple := func(a int, b bool, c ...string) {
+		assert.Equal(t, 10, a)
 		assert.Equal(t, true, b)
-	})
-	assert.NoError(t, emitter.EmitSync("multiple", 42, []string{"t", "e", "s", "t"}, true))
-
-	// Emitting an event with multiple arguments.
-	emitter.On("variadic_any", func(args ...any) {
-		assert.Equal(t, 42, args[0])
-		assert.Equal(t, []string{"t", "e", "s", "t"}, args[1])
-		assert.Equal(t, true, args[2])
-	})
-	assert.NoError(t, emitter.EmitSync("variadic_any", 42, []string{"t", "e", "s", "t"}, true))
-
-	// Emitting an event.
-	emitter.On("any_slice", func(args []any) {
-		assert.Equal(t, 42, args[0])
-		assert.Equal(t, []string{"t", "e", "s", "t"}, args[1])
-		assert.Equal(t, true, args[2])
-	})
-	assert.NoError(t, emitter.EmitSync("any_slice", []any{42, []string{"t", "e", "s", "t"}, true}))
-
-	// Emitting an event.
-	emitter.On("any", func(arg any) {
-		assert.Contains(t, []any{5000, "test", testType{}}, arg)
-	})
-	assert.NoError(t, emitter.EmitSync("any", 5000))
-	assert.NoError(t, emitter.EmitSync("any", "test"))
-	assert.NoError(t, emitter.EmitSync("any", testType{}))
-
-	// Emitting an event with multiple arguments.
-	emitter.On("variadic_string", func(s ...string) {
-		assert.Equal(t, "t", s[0])
-		assert.Equal(t, "e", s[1])
-		assert.Equal(t, "s", s[2])
-		assert.Equal(t, "t", s[3])
-	})
-	assert.NoError(t, emitter.EmitSync("variadic_string", "t", "e", "s", "t"))
+		assert.Equal(t, []string{"t", "e", "s", "t"}, c)
+	}
+	emitter.On("variadic", eventVariadicMultiple)
+	emitter.On("variadic", &eventVariadicMultiple)
+	assert.NoError(t, emitter.EmitSync("variadic", 10, true, "t", "e", "s", "t"))
 
 	// Emit event with multiple listeners.
-	countEvents := 0
-	event_1 := func(a, b int) {
+	event_1 := func(a int, b string) {
 		assert.Equal(t, 1, a)
-		assert.Equal(t, 2, b)
-		countEvents++
+		assert.Equal(t, "test", b)
 	}
-	event_2 := func(c, d int) {
-		assert.Equal(t, 1, c)
-		assert.Equal(t, 2, d)
-		countEvents++
+	event_2 := func(a int, b string) {
+		assert.Equal(t, 1, a)
+		assert.Equal(t, "test", b)
 	}
-	emitter.On("multiple_listeners", event_1)
-	emitter.On("multiple_listeners", event_2)
-	emitter.EmitSync("multiple_listeners", 1, 2)
-	assert.Equal(t, 2, countEvents)
+	emitter.On("different_listeners", event_1)
+	emitter.On("different_listeners", &event_2)
+	emitter.EmitSync("different_listeners", 1, "test")
 
 	// Emit without event name.
 	err := emitter.EmitSync("")
@@ -370,10 +331,14 @@ func TestEmitSync(t *testing.T) {
 	}
 
 	// Emitting an event that doesn't exist.
-	err = emitter.EmitSync("event")
+	err = emitter.EmitSync("event_not_exists")
 	if assert.Error(t, err) {
 		assert.Equal(t, ErrEventNotExists, err)
 	}
+}
+
+func createTypeErr(event string, pos int, expected string, got string) string {
+	return fmt.Sprintf("Wrong argument type. Event %s expected argument %d to be %s, got %s.", event, pos, expected, got)
 }
 
 func TestPanic(t *testing.T) {
@@ -381,58 +346,36 @@ func TestPanic(t *testing.T) {
 
 	// Wrong number of arguments.
 	emitter.On("panic", func(a, b int) {})
-	assert.PanicsWithError(t, "Wrong number of arguments. Event panic expected 2 arguments, got 0.", func() {
-		emitter.EmitSync("panic")
-	})
-	assert.PanicsWithError(t, "Wrong number of arguments. Event panic expected 2 arguments, got 1.", func() {
-		emitter.EmitSync("panic", 10)
-	})
-	assert.PanicsWithError(t, "Wrong number of arguments. Event panic expected 2 arguments, got 3.", func() {
-		emitter.EmitSync("panic", 10, 20, 30)
-	})
+	assert.PanicsWithError(t, (&argsError{"panic", 2, 0}).Error(), func() { emitter.EmitSync("panic") })
+	assert.PanicsWithError(t, (&argsError{"panic", 2, 1}).Error(), func() { emitter.EmitSync("panic", 10) })
+	assert.PanicsWithError(t, (&argsError{"panic", 2, 3}).Error(), func() { emitter.EmitSync("panic", 10, 20, 30) })
 	assert.NotPanics(t, func() { emitter.EmitSync("panic", 10, 20) })
 
 	// Wrong number of arguments.
 	emitter.On("panic_variadic", func(a int, b ...int) {})
-	assert.PanicsWithError(t, "Not enough arguments. Event panic_variadic expected at least 1 arguments, got 0.", func() {
-		emitter.EmitSync("panic_variadic")
-	})
+	assert.PanicsWithError(t, (&argsError{"panic_variadic", 1, 0}).Error(), func() { emitter.EmitSync("panic_variadic") })
 	assert.NotPanics(t, func() { emitter.EmitSync("panic_variadic", 10) })
 	assert.NotPanics(t, func() { emitter.EmitSync("panic_variadic", 10, 20, 30) })
 
 	// Wrong number of arguments.
-	emitter.On("panic_variadic_2", func(a int, b string, c ...int) {})
-	assert.PanicsWithError(t, "Not enough arguments. Event panic_variadic_2 expected at least 2 arguments, got 0.", func() {
-		emitter.EmitSync("panic_variadic_2")
-	})
-	assert.PanicsWithError(t, "Not enough arguments. Event panic_variadic_2 expected at least 2 arguments, got 1.", func() {
-		emitter.EmitSync("panic_variadic_2", 10)
-	})
-	assert.NotPanics(t, func() { emitter.EmitSync("panic_variadic_2", 10, "test") })
-	assert.NotPanics(t, func() { emitter.EmitSync("panic_variadic_2", 10, "test", 30) })
-	assert.NotPanics(t, func() { emitter.EmitSync("panic_variadic_2", 10, "test", 30, 40, 50, 60) })
+	emitter.On("panic_variadic_any", func(a int, b string, c ...any) {})
+	assert.PanicsWithError(t, (&argsError{"panic_variadic_any", 2, 0}).Error(), func() { emitter.EmitSync("panic_variadic_any") })
+	assert.PanicsWithError(t, (&argsError{"panic_variadic_any", 2, 1}).Error(), func() { emitter.EmitSync("panic_variadic_any", 10) })
+	assert.NotPanics(t, func() { emitter.EmitSync("panic_variadic_any", 10, "test") })
+	assert.NotPanics(t, func() { emitter.EmitSync("panic_variadic_any", 10, "test", 30) })
+	assert.NotPanics(t, func() { emitter.EmitSync("panic_variadic_any", 10, "test", 30, true, make(chan int), &emitter) })
 
 	// Wrong type of arguments.
-	emitter.On("panic_variadic_3", func(a int, b ...int) {})
-	assert.PanicsWithError(t, "Wrong argument type. Event panic_variadic_3 expected argument 2 to be int, got string.", func() {
-		emitter.EmitSync("panic_variadic_3", 10, "test")
-	})
-	assert.PanicsWithError(t, "Wrong argument type. Event panic_variadic_3 expected argument 2 to be int, got bool.", func() {
-		emitter.EmitSync("panic_variadic_3", 10, 20, 30, 40, 50, false, 60)
-	})
+	emitter.On("panic_variadic_type", func(a int, b ...int) {})
+	assert.PanicsWithError(t, createTypeErr("panic_variadic_type", 2, "int", "string"), func() { emitter.EmitSync("panic_variadic_type", 10, "test") })
+	assert.PanicsWithError(t, createTypeErr("panic_variadic_type", 2, "int", "bool"), func() { emitter.EmitSync("panic_variadic_type", 10, 20, 30, 40, 50, false, 60) })
 	assert.NotPanics(t, func() { emitter.EmitSync("panic_variadic_3", 10, 20, 30, 40, 50) })
 
 	// Wrong type of arguments.
 	emitter.On("panic_type", func(a int, b string, c testType) {})
-	assert.PanicsWithError(t, "Wrong argument type. Event panic_type expected argument 1 to be int, got string.", func() {
-		emitter.EmitSync("panic_type", "test", 20, testType{})
-	})
-	assert.PanicsWithError(t, "Wrong argument type. Event panic_type expected argument 2 to be string, got int.", func() {
-		emitter.EmitSync("panic_type", 10, 20, testType{})
-	})
-	assert.PanicsWithError(t, "Wrong argument type. Event panic_type expected argument 3 to be eventemitter.testType, got bool.", func() {
-		emitter.EmitSync("panic_type", 10, "test", false)
-	})
+	assert.PanicsWithError(t, createTypeErr("panic_type", 1, "int", "string"), func() { emitter.EmitSync("panic_type", "test", 20, testType{}) })
+	assert.PanicsWithError(t, createTypeErr("panic_type", 2, "string", "int"), func() { emitter.EmitSync("panic_type", 10, 20, testType{}) })
+	assert.PanicsWithError(t, createTypeErr("panic_type", 3, "eventemitter.testType", "bool"), func() { emitter.EmitSync("panic_type", 10, "test", false) })
 	assert.NotPanics(t, func() { emitter.EmitSync("panic_type", 10, "test", testType{}) })
 
 	// Wrong type of arguments.
@@ -441,57 +384,35 @@ func TestPanic(t *testing.T) {
 	assert.NotPanics(t, func() { emitter.EmitSync("panic_any", 10, true) })
 	assert.NotPanics(t, func() { emitter.EmitSync("panic_any", 10, testType{}) })
 
-	emitter.On("panic_any_2", func(a bool, b any, c chan int) {})
-	assert.PanicsWithError(t, "Wrong argument type. Event panic_any_2 expected argument 3 to be chan int, got chan string.", func() {
-		emitter.EmitSync("panic_any_2", false, 100, make(chan string))
-	})
-	assert.NotPanics(t, func() { emitter.EmitSync("panic_any_2", true, "test", make(chan int)) })
-
-	// Wrong type of arguments.
-	emitter.On("panic_variadic_any", func(a string, b bool, c ...any) {})
-	assert.PanicsWithError(t, "Wrong argument type. Event panic_variadic_any expected argument 1 to be string, got int.", func() {
-		emitter.EmitSync("panic_variadic_any", 10, true)
-	})
-	assert.PanicsWithError(t, "Wrong argument type. Event panic_variadic_any expected argument 2 to be bool, got string.", func() {
-		emitter.EmitSync("panic_variadic_any", "test", "test")
-	})
-	assert.NotPanics(t, func() { emitter.EmitSync("panic_variadic_any", "test", true) })
-	assert.NotPanics(t, func() { emitter.EmitSync("panic_variadic_any", "test", true, 10, 20, 30) })
-	assert.NotPanics(t, func() {
-		emitter.EmitSync("panic_variadic_any", "test", true, false, "test", make(chan bool), testType{})
-	})
+	emitter.On("panic_any_type", func(a bool, b any, c chan int) {})
+	assert.PanicsWithError(t, createTypeErr("panic_any_type", 3, "chan int", "chan string"), func() { emitter.EmitSync("panic_any_type", false, 100, make(chan string)) })
+	assert.NotPanics(t, func() { emitter.EmitSync("panic_any_type", true, "test", make(chan int)) })
 }
 
 func TestEventNames(t *testing.T) {
 	emitter := New()
 
-	event_1 := func() {}
-	event_2 := func() {}
-	event_3 := func() {}
-	event_3_1 := func() {}
+	event := func() {}
+	events := []string{"event_1", "event_2", "event_3"}
+	for _, eventName := range events {
+		emitter.On(eventName, event)
+	}
 
-	emitter.On("event_1", event_1)
-	emitter.On("event_2", event_2)
-	emitter.On("event_3", event_3)
-	emitter.On("event_3", event_3_1)
-
+	// Get event names.
 	names := emitter.EventNames()
 	assert.Equal(t, 3, len(names))
-	assert.Contains(t, names, "event_1")
-	assert.Contains(t, names, "event_2")
-	assert.Contains(t, names, "event_3")
+	for _, eventName := range events {
+		assert.Contains(t, names, eventName)
+	}
 
-	emitter.Off("event_1", event_1)
-	emitter.Off("event_2", event_2)
+	emitter.Off("event_1", event)
+	emitter.Off("event_2", event)
+
 	names = emitter.EventNames()
 	assert.Equal(t, 1, len(names))
 	assert.Contains(t, names, "event_3")
 
-	emitter.Off("event_3", event_3)
-	names = emitter.EventNames()
-	assert.Equal(t, 1, len(names))
-
-	emitter.RemoveListener("event_3", event_3_1)
+	emitter.Off("event_3", event)
 	names = emitter.EventNames()
 	assert.Equal(t, 0, len(names))
 }
@@ -505,7 +426,7 @@ func TestListeners(t *testing.T) {
 
 	emitter.On("event_1", event_1)
 	emitter.On("event_2", event_2)
-	emitter.On("event_2", event_2_1)
+	emitter.On("event_2", &event_2_1)
 
 	// Get listeners for an event.
 	listeners, err := emitter.Listeners("event_1")
@@ -528,7 +449,6 @@ func TestListeners(t *testing.T) {
 		assert.Nil(t, listeners)
 	}
 
-	// Get listeners for an event.
 	emitter.RemoveListener("event_2", event_2)
 	listeners, err = emitter.Listeners("event_2")
 	if assert.NoError(t, err) {
@@ -553,7 +473,7 @@ func TestListenerCount(t *testing.T) {
 
 	emitter.On("event_1", event_1)
 	emitter.On("event_2", event_2)
-	emitter.On("event_2", event_2_1)
+	emitter.On("event_2", &event_2_1)
 
 	// Get listeners for an event.
 	count, err := emitter.ListenerCount("event_1")
@@ -586,5 +506,154 @@ func TestListenerCount(t *testing.T) {
 	if assert.Error(t, err) {
 		assert.Equal(t, ErrEmptyName, err)
 		assert.Equal(t, 0, count)
+	}
+}
+
+func TestIsFunction(t *testing.T) {
+	emitter := New()
+
+	event_1 := func() {}
+	event_2 := &event_1
+
+	assert.True(t, emitter.isFunction(event_1))
+	assert.True(t, emitter.isFunction(event_2))
+
+	notAfunction := "not a function"
+	for _, v := range []any{1, "test", []*any{}, true, &notAfunction, []any{}, nil, notAfunction, make(chan int), 42.00} {
+		assert.False(t, emitter.isFunction(v))
+	}
+}
+
+func TestIsEqual(t *testing.T) {
+	emitter := New()
+
+	event_1 := func() {}
+	event_2 := &event_1
+	event_3 := event_1
+	event_4 := event_2
+
+	event_other_1 := func() {}
+	event_other_2 := &event_other_1
+	event_other_3 := event_other_1
+
+	assert.True(t, emitter.isEqual(event_1, event_1))
+	assert.True(t, emitter.isEqual(event_1, event_3))
+	assert.True(t, emitter.isEqual(event_2, event_2))
+	assert.True(t, emitter.isEqual(event_2, event_4))
+	assert.False(t, emitter.isEqual(event_1, event_2))
+	assert.False(t, emitter.isEqual(event_2, event_3))
+
+	assert.False(t, emitter.isEqual(event_1, event_other_1))
+	assert.False(t, emitter.isEqual(event_2, event_other_2))
+	assert.False(t, emitter.isEqual(event_3, event_other_3))
+}
+
+func BenchmarkAddListener(b *testing.B) {
+	emitter := New()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		emitter.AddListener("event", func() {})
+	}
+}
+
+func BenchmarkAddListenerPointer(b *testing.B) {
+	emitter := New()
+	testEvent := func() {}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		emitter.AddListener("event", &testEvent)
+	}
+}
+
+func BenchmarkEmitSync(b *testing.B) {
+	emitter := New()
+	emitter.AddListener("event", func() {})
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		emitter.EmitSync("event")
+	}
+}
+
+func BenchmarkEmitSyncPointer(b *testing.B) {
+	emitter := New()
+	testEvent := func() {}
+	emitter.AddListener("event", &testEvent)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		emitter.EmitSync("event")
+	}
+}
+
+func BenchmarkEmitSyncWithArguments(b *testing.B) {
+	emitter := New()
+	emitter.AddListener("event", func(a int, b string, c bool) {})
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		emitter.EmitSync("event", 1, "test", true)
+	}
+}
+
+func BenchmarkEmitSyncPointerWithArguments(b *testing.B) {
+	emitter := New()
+	testEvent := func(a int, b string, c bool) {}
+	emitter.AddListener("event", &testEvent)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		emitter.EmitSync("event", 1, "test", true)
+	}
+}
+
+func BenchmarkEmitSyncVariadic(b *testing.B) {
+	emitter := New()
+	emitter.AddListener("event", func(a int, b bool, c ...any) {})
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		emitter.EmitSync("event", 1, true, "test", false, 1000)
+	}
+}
+
+func BenchmarkEmitSyncPointerVariadic(b *testing.B) {
+	emitter := New()
+	testEvent := func(a int, b bool, c ...any) {}
+	emitter.AddListener("event", &testEvent)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		emitter.EmitSync("event", 1, true, "test", false, 1000)
+	}
+}
+
+func BenchmarkRemoveListener(b *testing.B) {
+	emitter := New()
+
+	event := func() {}
+	for i := 0; i < b.N; i++ {
+		emitter.AddListener("event", event)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		emitter.RemoveListener("event", event)
+	}
+}
+
+func BenchmarkRemoveListenerPointer(b *testing.B) {
+	emitter := New()
+	testEvent := func() {}
+
+	for i := 0; i < b.N; i++ {
+		emitter.AddListener("event", &testEvent)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		emitter.RemoveListener("event", &testEvent)
 	}
 }

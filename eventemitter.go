@@ -9,13 +9,33 @@ import (
 
 var (
 	ErrEmptyName      = errors.New("Event name cannot be empty")
-	ErrNotAFunction   = errors.New("Callback must be a function")
-	ErrEventExists    = errors.New("Event already exists")
+	ErrNotAFunction   = errors.New("Callback must be a function or a pointer to a function")
 	ErrEventNotExists = errors.New("Event does not exist")
 )
 
 type Emitter struct {
 	listeners sync.Map
+}
+
+type argsError struct {
+	event    string
+	expected int
+	got      int
+}
+
+type argsTypeError struct {
+	event    string
+	pos      int
+	expected reflect.Type
+	got      reflect.Type
+}
+
+func (e *argsError) Error() string {
+	return fmt.Sprintf("Wrong number of arguments. Event %s expected %d arguments, got %d.", e.event, e.expected, e.got)
+}
+
+func (e *argsTypeError) Error() string {
+	return fmt.Sprintf("Wrong argument type. Event %s expected argument %d to be %s, got %s.", e.event, e.pos, e.expected, e.got)
 }
 
 // New returns a new event emitter.
@@ -24,27 +44,22 @@ func New() *Emitter {
 }
 
 // AddListener adds a listener for the specified event.
-// Returns an error if the event already exists, or the listener is not a function.
+// Returns an error if the eventName is empty, or the listener is not a function.
+// No checks are made to see if the listener has already been added. Multiple
+// calls passing the same combination of eventName and listener will result in the
+// listener being added, and called, multiple times.
+// By default, event listeners are invoked in the order they are added.
 func (e *Emitter) AddListener(eventName string, listener any) error {
 	if len(eventName) == 0 {
 		return ErrEmptyName
 	}
 
-	if listener == nil || reflect.TypeOf(listener).Kind() != reflect.Func {
+	if !e.isFunction(listener) {
 		return ErrNotAFunction
 	}
 
 	if listeners, ok := e.listeners.Load(eventName); ok {
-		ptr := reflect.ValueOf(listener).Pointer()
-
-		for _, handler := range listeners.([]any) {
-			if reflect.ValueOf(handler).Pointer() == ptr {
-				return ErrEventExists
-			}
-		}
-
-		listeners = append(listeners.([]any), listener)
-		e.listeners.Store(eventName, listeners)
+		e.listeners.Store(eventName, append(listeners.([]any), listener))
 	} else {
 		e.listeners.Store(eventName, []any{listener})
 	}
@@ -57,39 +72,41 @@ func (e *Emitter) On(eventName string, listener any) error {
 	return e.AddListener(eventName, listener)
 }
 
-// RemoveListener removes the listener for the specified event.
-// Returns an error if the event does not exist, or the listener is not a function.
-func (e *Emitter) RemoveListener(eventName string, listener any) error {
-	if len(eventName) == 0 {
-		return ErrEmptyName
+// RemoveListener removes the specified listener from the specified event.
+// Returns true if the listener was removed, false otherwise.
+// RemoveListener will remove, at most, one instance of a listener from the
+// listener map. If any single listener has been added multiple times to the
+// listener map for the specified eventName, then RemoveListener must be called
+// multiple times to remove each instance.
+// When a single function has been added as a handler multiple times for a single
+// event, RemoveListener will remove the most recently added instance.
+func (e *Emitter) RemoveListener(eventName string, listener any) (ok bool, err error) {
+	if !e.isFunction(listener) {
+		return false, ErrNotAFunction
 	}
 
-	if listener == nil || reflect.TypeOf(listener).Kind() != reflect.Func {
-		return ErrNotAFunction
+	listeners, err := e.getListeners(eventName)
+	if err != nil {
+		return false, err
 	}
 
-	if listeners, ok := e.listeners.Load(eventName); ok {
-		ptr := reflect.ValueOf(listener).Pointer()
-
-		for i, handler := range listeners.([]any) {
-			if reflect.ValueOf(handler).Pointer() == ptr {
-				if len(listeners.([]any)) == 1 {
-					e.listeners.Delete(eventName)
-				} else {
-					listeners = append(listeners.([]any)[:i], listeners.([]any)[i+1:]...)
-					e.listeners.Store(eventName, listeners)
-				}
-
-				return nil
+	for i := len(listeners) - 1; i >= 0; i-- {
+		if e.isEqual(listener, listeners[i]) {
+			if len(listeners) == 1 {
+				e.listeners.Delete(eventName)
+			} else {
+				e.listeners.Store(eventName, append(listeners[:i], listeners[i+1:]...))
 			}
+
+			return true, nil
 		}
 	}
 
-	return ErrEventNotExists
+	return false, nil
 }
 
 // Off is an alias for .RemoveListener(eventName, listener).
-func (e *Emitter) Off(eventName string, listener any) error {
+func (e *Emitter) Off(eventName string, listener any) (ok bool, err error) {
 	return e.RemoveListener(eventName, listener)
 }
 
@@ -109,76 +126,51 @@ func (e *Emitter) Clear(eventName ...string) {
 	e.RemoveAllListeners(eventName...)
 }
 
-// Emit emits an event asynchronously with the specified arguments.
+// Emit asynchronously calls each of the listeners registered for the event
+// named eventName, in the order they were registered, passing the supplied
+// arguments to each.
 // Returns an error if the event does not exist.
 func (e *Emitter) Emit(eventName string, arguments ...any) error {
 	return e.emit(eventName, arguments, false)
 }
 
-// EmitSync emits an event synchronously with the specified arguments.
+// EmitSync synchronously calls each of the listeners registered for the event
+// named eventName, in the order they were registered, passing the supplied
+// arguments to each.
 // Returns an error if the event does not exist.
 func (e *Emitter) EmitSync(eventName string, arguments ...any) error {
 	return e.emit(eventName, arguments, true)
 }
 
 func (e *Emitter) emit(eventName string, arguments []any, sync bool) error {
-	if len(eventName) == 0 {
-		return ErrEmptyName
+	listeners, err := e.getListeners(eventName)
+	if err != nil {
+		return err
 	}
 
-	if listeners, ok := e.listeners.Load(eventName); ok {
-		args := make([]reflect.Value, 0)
-		for _, param := range arguments {
-			args = append(args, reflect.ValueOf(param))
-		}
-
-		for _, listener := range listeners.([]any) {
-			handler := reflect.ValueOf(listener)
-			if err := e.checkArguments(eventName, handler.Type(), args); err != nil {
-				panic(err)
-			}
-
-			if sync {
-				handler.Call(args)
-			} else {
-				go handler.Call(args)
-			}
-		}
-
-		return nil
+	args := make([]reflect.Value, 0, len(arguments))
+	for _, arg := range arguments {
+		args = append(args, reflect.ValueOf(arg))
 	}
 
-	return ErrEventNotExists
-}
+	for _, listener := range listeners {
+		fn := reflect.ValueOf(listener)
 
-func (e *Emitter) checkArguments(eventName string, fnType reflect.Type, args []reflect.Value) error {
-	numIn := fnType.NumIn()
-
-	// Check arguments length.
-	if fnType.IsVariadic() {
-		if (numIn - 1) > len(args) {
-			return fmt.Errorf("Not enough arguments. Event %s expected at least %d arguments, got %d.", eventName, numIn-1, len(args))
+		// If the listener is a pointer to a function, get the function.
+		if fn.Kind() == reflect.Pointer {
+			fn = fn.Elem()
 		}
-	} else if numIn != len(args) {
-		return fmt.Errorf("Wrong number of arguments. Event %s expected %d arguments, got %d.", eventName, numIn, len(args))
-	}
 
-	// Check arguments type.
-	for i := 0; i < numIn; i++ {
-		if fnType.IsVariadic() && i == (numIn-1) {
-			variadicArgs := args[i:]
+		// Check the number of arguments and their types.
+		if err := e.checkArguments(eventName, fn, args); err != nil {
+			panic(err)
+		}
 
-			if len(variadicArgs) > 0 {
-				variadicType := fnType.In(i).Elem()
-
-				for j := 0; j < len(variadicArgs); j++ {
-					if !variadicArgs[j].Type().AssignableTo(variadicType) {
-						return fmt.Errorf("Wrong argument type. Event %s expected argument %d to be %s, got %s.", eventName, i+1, variadicType, variadicArgs[j].Type())
-					}
-				}
-			}
-		} else if !args[i].Type().AssignableTo(fnType.In(i)) {
-			return fmt.Errorf("Wrong argument type. Event %s expected argument %d to be %s, got %s.", eventName, i+1, fnType.In(i), args[i].Type())
+		// Call the listener.
+		if sync {
+			fn.Call(args)
+		} else {
+			go fn.Call(args)
 		}
 	}
 
@@ -227,4 +219,61 @@ func (e *Emitter) getListeners(eventName string) ([]any, error) {
 	}
 
 	return nil, ErrEventNotExists
+}
+
+func (e *Emitter) checkArguments(eventName string, fn reflect.Value, args []reflect.Value) error {
+	fnType := fn.Type()
+	isVariadic := fnType.IsVariadic()
+	noParams := fnType.NumIn()
+
+	// Check arguments length.
+	if isVariadic {
+		if (noParams - 1) > len(args) {
+			return &argsError{eventName, noParams - 1, len(args)}
+		}
+	} else if noParams != len(args) {
+		return &argsError{eventName, noParams, len(args)}
+	}
+
+	// Check arguments type.
+	for i := 0; i < noParams; i++ {
+		if isVariadic && i == (noParams-1) {
+			args = args[i:] // Variadic arguments.
+
+			for j := 0; j < len(args); j++ {
+				if !args[j].Type().AssignableTo(fnType.In(i).Elem()) {
+					return &argsTypeError{eventName, i + 1, fnType.In(i).Elem(), args[j].Type()}
+				}
+			}
+		} else if !args[i].Type().AssignableTo(fnType.In(i)) {
+			return &argsTypeError{eventName, i + 1, fnType.In(i), args[i].Type()}
+		}
+	}
+
+	return nil
+}
+
+func (e *Emitter) isFunction(fn any) bool {
+	if fn != nil {
+		kind := reflect.TypeOf(fn).Kind()
+		if kind == reflect.Func || (kind == reflect.Pointer && reflect.ValueOf(fn).Elem().Kind() == reflect.Func) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (e *Emitter) isEqual(listener, storedListener any) bool {
+	if reflect.TypeOf(listener).Kind() == reflect.Pointer {
+		if reflect.TypeOf(storedListener).Kind() == reflect.Pointer && storedListener == listener {
+			return true
+		}
+	} else {
+		if reflect.TypeOf(storedListener).Kind() != reflect.Pointer && reflect.ValueOf(storedListener).Pointer() == reflect.ValueOf(listener).Pointer() {
+			return true
+		}
+	}
+
+	return false
 }
